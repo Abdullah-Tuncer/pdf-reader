@@ -3,12 +3,12 @@
     <v-row justify="center">
       <v-col cols="12" md="8">
         <v-file-input
-            v-model="settings.selectedFile"
-            @change="handleFileUpload"
-            @click:clear="status.isReady = false"
-            :loading="status.isLoading"
-            :error-messages="status.error"
-            :error="status.isErrorExist()"
+            v-model="pdfReader.settings.selectedFile"
+            @change="onFileChange"
+            @click:clear="pdfReader.status.isReady = false"
+            :loading="pdfReader.status.isLoading"
+            :error-messages="pdfReader.status.error"
+            :error="pdfReader.status.isErrorExist()"
             prepend-inner-icon="mdi-file-pdf-box"
             accept="application/pdf"
             label="Dosya Seç"
@@ -17,32 +17,33 @@
             outlined
         />
         <v-alert
-            v-if="status.isLoading"
+            v-if="pdfReader.status.isLoading"
             type="info"
             class="my-4"
             icon="mdi-progress-upload"
         >
           PDF yükleniyor, lütfen bekleyin...
         </v-alert>
-        <v-card v-if="status.isReady" class="mt-4" elevation="1">
+        <v-card v-if="pdfReader.status.isReady" class="mt-4" elevation="1">
           <v-card-actions class="controls">
             <v-row align="center">
               <v-col cols="12">
                 <v-btn
-                    :color="status.isSpeaking ? 'error' : 'primary'"
-                    @click="toggleSpeech"
-                    :prepend-icon="status.isSpeaking ? 'mdi-pause' : 'mdi-play'"
-                    :loading="status.isLoading"
+                    :color="pdfReader.status.isSpeaking ? 'error' : 'primary'"
+                    @click="playPause"
+                    :prepend-icon="pdfReader.status.isSpeaking ? 'mdi-pause' : 'mdi-play'"
+                    :loading="pdfReader.status.isLoading"
                     variant="outlined"
                     block
                 >
-                  {{ status.isSpeaking ? 'Durdur' : 'Oku' }}
+                  {{ pdfReader.status.isSpeaking ? 'Durdur' : 'Oku' }}
                 </v-btn>
               </v-col>
               <v-col cols="12">
                 <v-select
-                    v-model="settings.selectedVoice"
-                    :items="settings.voices"
+                    v-model="pdfReader.settings.selectedVoice"
+                    :items="pdfReader.settings.voices"
+                    :disabled="pdfReader.status.isSpeaking"
                     item-title="name"
                     item-value="id"
                     label="Ses Seçimi"
@@ -76,24 +77,25 @@
               </v-col>
               <v-col cols="12" md="6">
                 <v-number-input
-                    v-model="startPage"
+                    v-model="pdfReader.startPage"
                     label="Başlangıç Sayfası"
                     controlVariant="split"
-                    :disabled="status.isSpeaking"
-                    :max="totalPages"
+                    :disabled="pdfReader.status.isSpeaking"
+                    :max="pdfReader.totalPages"
                     :min="1"
                     hide-details
                 />
               </v-col>
               <v-col cols="12" md="6">
                 <v-number-input
-                    v-model="settings.rate"
+                    v-model="pdfReader.settings.rate"
                     label="Okuma Hızı"
                     controlVariant="split"
                     :precision="1"
-                    :step="settings.STEP_RATE"
-                    :min="settings.MIN_RATE"
-                    :max="settings.MAX_RATE"
+                    :disabled="pdfReader.status.isSpeaking"
+                    :step="pdfReader.settings.STEP_RATE"
+                    :min="pdfReader.settings.MIN_RATE"
+                    :max="pdfReader.settings.MAX_RATE"
                     hide-details
                 />
               </v-col>
@@ -101,26 +103,26 @@
           </v-card-actions>
           <v-card-text v-if="showSlider">
             <v-progress-linear
-                :model-value="currentPage"
-                :max="totalPages"
+                :model-value="pdfReader.currentPage"
+                :max="pdfReader.totalPages"
                 height="25"
                 color="light-blue"
                 striped
             >
               <template v-slot:default>
-                <strong>İlerleme: {{ currentPage }}/{{ totalPages }}. sayfa</strong>
+                <strong>İlerleme: {{ pdfReader.currentPage }}/{{ pdfReader.totalPages }}. sayfa</strong>
               </template>
             </v-progress-linear>
             <v-slider
-                v-model="count"
+                v-model="pdfReader.count"
                 @mousedown="stopSpeech"
                 @end="handleSliderChange"
-                :max="range"
+                :max="pdfReader.range"
                 :step="1"
             >
               <template #details>
                 <v-spacer/>
-                <span class="text-caption text-grey">{{ count }} / {{ range }}</span>
+                <span class="text-caption text-grey">{{ pdfReader.count }} / {{ pdfReader.range }}</span>
               </template>
             </v-slider>
           </v-card-text>
@@ -131,183 +133,40 @@
 </template>
 
 <script lang="ts" setup>
-import {ref, onMounted, watch, computed, reactive} from 'vue';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
-import {Status} from "@/classes/Status.ts";
-import {Settings} from "@/classes/Settings.ts";
+import {onMounted, watch, computed, reactive, onUnmounted} from 'vue';
+import {PdfReader} from "@/classes/PdfReader.ts";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-
-const status: Status = reactive(new Status());
-const settings: Settings = reactive(new Settings());
-
-// sayfalar duruma göre startpage kaldırılabilir
-const startPage = ref(1);
-const currentPage = ref(1);
-const totalPages = ref(0);
-// slider üzerinde değişiklik yapılan sayfa
-const changedPage = ref<number | null>(null);
-
-// silder için
-const range = ref(1);
-const count = ref(0);
-
-let speech: SpeechSynthesisUtterance | null = null;
-let fullText: string[] = [];
-const currentText = ref('');
+const pdfReader: PdfReader = reactive(new PdfReader());
 
 onMounted(async () => {
-  await settings.loadVoices();
+  await pdfReader.initialize();
 });
 
-const handleFileUpload = async (file: File | null) => {
-  if (!file) {
-    status.error = "Lütfen burayı doldurun."
-    return;
-  }
-  try {
-    status.isLoading = true;
-    status.error = "";
-    const arrayBuffer = await (settings.selectedFile as File).arrayBuffer();
-    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-    totalPages.value = pdf.numPages;
+onUnmounted(() => {
+  pdfReader.stopSpeech();
+});
 
-    fullText = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      fullText.push(textContent.items.map((item: any) => item.str).join(' '));
-    }
-    status.isReady = true;
-  } catch (err: any) {
-    status.error = 'PDF okunurken hata oluştu: ' + err.message;
-    status.isReady = false;
-  } finally {
-    status.isLoading = false;
-  }
-};
-
-const stopSpeech = () => {
-  window.speechSynthesis.cancel();
-  status.isSpeaking = false;
-  status.isPaused = true;
+const onFileChange = async () => {
+  await pdfReader.handleFileUpload();
 }
+
+const playPause = () => {
+  pdfReader.toggleSpeech();
+}
+
+watch(() => pdfReader.startPage, (newVal) => {
+  pdfReader.status.isReset = newVal != pdfReader.currentPage;
+});
 
 const showSlider = computed(() => {
-  return status.isSpeaking || status.isPaused;
+  return pdfReader.status.isSpeaking || pdfReader.status.isPaused;
 })
 
-watch(startPage, (newVal) => {
-  status.isReset = newVal != currentPage.value;
-});
-
-const handleSliderChange = (newVal: number) => {
-  speech = new SpeechSynthesisUtterance();
-
-  speech.text = currentText.value.substring(newVal);
-  speech.voice = settings.selectedVoice?.value || null;
-  speech.lang = settings.selectedVoice?.value?.lang || 'tr-TR';
-  speech.rate = settings.rate;
-  status.isSpeaking = true;
-  status.isPaused = false;
-  changedPage.value = currentPage.value as any;
-
-  speech.onboundary = (event) => {
-    if (changedPage.value === currentPage.value)
-      count.value = newVal + event.charIndex;
-    else
-      count.value = event.charIndex;
-  };
-
-  speech.onend = () => {
-    if (currentPage.value < totalPages.value) {
-      currentPage.value++;
-      currentText.value = fullText[currentPage.value - 1];
-      if (speech) {
-        speech.text = currentText.value;
-        range.value = speech.text.length;
-        window.speechSynthesis.speak(speech);
-      }
-    } else {
-      status.isSpeaking = false;
-      currentPage.value = startPage.value;
-    }
-    count.value = 0;
-  };
-  window.speechSynthesis.speak(speech);
+const handleSliderChange = (v: any) => {
+  pdfReader.startSpeech(v);
 }
 
-const startSpeech = () => {
-  window.speechSynthesis.cancel();
-  status.isSpeaking = false;
-  currentPage.value = startPage.value;
-  currentText.value = fullText[currentPage.value - 1];
-  range.value = currentText.value.length;
-  count.value = 0;
-
-  speech = new SpeechSynthesisUtterance();
-  speech.text = currentText.value;
-  speech.voice = settings.selectedVoice?.value || null;
-  speech.lang = settings.selectedVoice?.value?.lang || 'tr-TR';
-  speech.rate = settings.rate;
-
-
-  speech.onstart = () => {
-    count.value = 0;
-  };
-
-  speech.onboundary = (event) => {
-    count.value = event.charIndex;
-  };
-
-  speech.onend = () => {
-    if (currentPage.value < totalPages.value) {
-      currentPage.value++;
-      currentText.value = fullText[currentPage.value - 1];
-      if (speech) {
-        speech.text = currentText.value;
-        range.value = speech.text.length;
-        window.speechSynthesis.speak(speech);
-      }
-    } else {
-      status.isSpeaking = false;
-      currentPage.value = startPage.value;
-    }
-    count.value = 0;
-  };
-  window.speechSynthesis.speak(speech);
-};
-
-
-const toggleSpeech = () => {
-  if (status.isSpeaking) {
-    status.isPaused = true;
-    window.speechSynthesis.pause();
-  } else {
-    if (status.isPaused && !status.isReset) {
-      status.isPaused = false;
-      window.speechSynthesis.resume();
-    } else
-      startSpeech();
-
-  }
-  status.isSpeaking = !status.isSpeaking;
-};
-
+const stopSpeech = () => {
+  pdfReader.stopSpeech();
+}
 </script>
-
-<style scoped lang="scss">
-.controls {
-  padding: 1rem;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-:deep(.v-progress-linear__content) {
-  color: white;
-  font-size: 0.85rem;
-}
-</style>

@@ -2,7 +2,7 @@ const MIN_RATE = 0.5;
 const MAX_RATE = 2.0;
 const STEP_RATE = 0.1;
 
-interface ISettings {
+export interface ISettings {
     voices: Array<Voice>,
     selectedVoice?: Voice,
     selectedFile?: File,
